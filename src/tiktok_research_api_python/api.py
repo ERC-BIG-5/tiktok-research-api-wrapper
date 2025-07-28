@@ -43,6 +43,7 @@ class TikTokResearchAPI:
         self.max_query_retries = max_query_retries
         self.retry_sleep_time = retry_sleep_time
         self.logger = logging.getLogger("TikTokResearchAPI")
+        self.logger.setLevel(logging.INFO)
         self.requests_counter: defaultdict = defaultdict(int)
 
     def headers(self):
@@ -104,7 +105,7 @@ class TikTokResearchAPI:
 
         if self.requests >= self.qps:
             # Enforce delay if the limit is reached
-            wait_time = max(1,1 - elapsed_time)
+            wait_time = max(1, 1 - elapsed_time)
             logging.info(f"Rate limit reached. Waiting for {wait_time:.2f} seconds...")
             time.sleep(wait_time)
             # Reset the counter and start time after waiting
@@ -132,6 +133,7 @@ class TikTokResearchAPI:
         while current_start <= end_date:
             # Break if max_total is reached
             max_total = getattr(video_request, "max_total", 1000000)
+            errors_count = 0
             if len(aggregate_videos) >= max_total:
                 break
             # Calculate the end date for the current chunk (30 days or less)
@@ -167,10 +169,12 @@ class TikTokResearchAPI:
                     self.logger.error(f"{response.status_code}/{response.content} sleeping for 2 sec...")
                     time.sleep(2)
                     retries += 1
+                    errors_count += 1
                     continue
                 error_code = response_data.get("error", {}).get("code", None)
                 error_msg = response_data.get("error", {}).get("message", None)
                 if response.status_code == 429:
+                    errors_count += 1
                     raise Exception("Rate limit reached")
                 if error_code != APIErrorResponse.OK:
                     if response.status_code == 500 or (
@@ -183,6 +187,7 @@ class TikTokResearchAPI:
                             max_retries_hit = True
                             break
                         time.sleep(self.retry_sleep_time)
+                        errors_count += 1
                         continue
                     else:
                         raise Exception(f"{response.status_code=}; {error_code=}; {error_msg=}")
@@ -204,8 +209,8 @@ class TikTokResearchAPI:
                 self.logger.info(
                     f"Page {page} got {len(videos)} videos (retries: {retries}) (aggregated {len(aggregate_videos)}) and has_more {has_more}")
 
-                #self.logger.info(f"Page {page} got {len(videos)} videos and has_more {has_more}")
-                #self.logger.info(f"Aggregated videos: {len(aggregate_videos)}")
+                # self.logger.info(f"Page {page} got {len(videos)} videos and has_more {has_more}")
+                # self.logger.info(f"Aggregated videos: {len(aggregate_videos)}")
                 retries = 0  # Reset retries on success
                 page += 1
 
@@ -213,6 +218,7 @@ class TikTokResearchAPI:
                     body["cursor"] = root_cursor
                     body["search_id"] = search_id
 
+            self.logger.debug(f"Error count: {errors_count}")
             if max_retries_hit:
                 break
             else:
