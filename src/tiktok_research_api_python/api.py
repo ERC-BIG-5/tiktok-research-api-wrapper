@@ -105,7 +105,7 @@ class TikTokResearchAPI:
 
         if self.requests >= self.qps:
             # Enforce delay if the limit is reached
-            wait_time = max(1, 1 - elapsed_time)
+            wait_time = max(2, 2 - elapsed_time)
             logging.info(f"Rate limit reached. Waiting for {wait_time:.2f} seconds...")
             time.sleep(wait_time)
             # Reset the counter and start time after waiting
@@ -393,3 +393,5 @@ class TikTokResearchAPI:
             if root_cursor is not None:
                 body["cursor"] = root_cursor
         return aggregated_reposted_videos, root_cursor, has_more
+
+
