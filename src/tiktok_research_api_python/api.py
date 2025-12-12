@@ -4,6 +4,10 @@
 # the LICENSE file in the root directory of this source tree.
 from collections import defaultdict
 from json import JSONDecodeError
+from pathlib import Path
+
+from requests import Response
+from typing import Literal
 
 import requests
 import urllib
@@ -394,4 +398,34 @@ class TikTokResearchAPI:
                 body["cursor"] = root_cursor
         return aggregated_reposted_videos, root_cursor, has_more
 
+    def create_batch_compliance_task(self,
+                         ids: list[str],
+                         category: Literal["video", "comment"] = "video") -> Response:
+        endpoint = f"{self.url}/v2/research/validation_task/create/"
+        if len(ids) > 10_000:
+            raise ValueError("Too many ids. Max 10.000")
+        file = Path("temp_tiktok_compliance.txt")
+        with file.open("w") as fout:
+            fout.write("\n".join(ids))
 
+        with file.open( "rb") as file_:
+            files = {
+                'file_data': file_
+            }
+            data = {
+                'category': category
+            }
+            headers = {
+                'Authorization': self.headers()['Authorization']
+            }
+            response = requests.post(endpoint, files=files, data=data, headers=headers)
+            file.unlink()
+            return response
+
+    def get_batch_compliance_task_status(self, task_id: int) -> Response:
+        endpoint = f"{self.url}/v2/research/validation_task_status/get/"
+        return requests.post(endpoint, json={"task_id": task_id}, headers=self.headers())
+
+    def get_completed_batch_compliance_task_data(self, task_id: int) -> Response:
+        endpoint = f"{self.url}/v2/research/validation_task/download/"
+        return requests.post(endpoint, json={"task_id": task_id}, headers=self.headers())
