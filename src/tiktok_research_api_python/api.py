@@ -28,7 +28,9 @@ class TikTokResearchAPI:
                  client_secret,
                  qps=10,
                  max_query_retries=30,
-                 retry_sleep_time=6):
+                 retry_sleep_time=6,
+                 max_server_error_retries=3,
+                 request_timeout=60):
         if not client_key:
             raise ValueError("client_key is required")
         if not client_secret:
@@ -46,7 +48,9 @@ class TikTokResearchAPI:
         self.start_time = datetime.now()
         self.max_query_retries = max_query_retries
         self.retry_sleep_time = retry_sleep_time
-        self.logger = logging.getLogger("TikTokResearchAPI")
+        self.max_server_error_retries = max_server_error_retries
+        self.request_timeout = request_timeout
+        self.logger =logging.getLogger("TikTokResearchAPI")
         self.logger.setLevel(logging.INFO)
         self.requests_counter: defaultdict = defaultdict(int)
 
@@ -164,26 +168,41 @@ class TikTokResearchAPI:
             page = 0
             while True:
                 self.rate_limiter()
-                response = requests.post(endpoint, json=body, headers=self.headers())
+                response = requests.post(endpoint, json=body, headers=self.headers(),
+                                         timeout=self.request_timeout)
                 self.requests_counter["query_videos"] += 1
                 try:
                     response_data = response.json()
                 except JSONDecodeError as exc:
-                    self.logger.error(exc)
-                    self.logger.error(f"{response.status_code}/{response.content} sleeping for 2 sec...")
-                    time.sleep(2)
                     retries += 1
                     errors_count += 1
+                    if retries > self.max_server_error_retries:
+                        raise ServerError(response.status_code, error_msg=response.text[:200]) from exc
+                    self.logger.warning(f"Unparsable response {response.status_code} ({start_str}-{end_str}), "
+                                        f"retry {retries}/{self.max_server_error_retries} in 2 sec: {response.text[:200]}")
+                    time.sleep(2)
                     continue
                 error_code = response_data.get("error", {}).get("code", None)
-                error_msg = response_data.get("error", {}).get("message", None)
+                error_msg = response_data.get("error", {}).get("message", None) or ""
+                log_id = response_data.get("error", {}).get("log_id", None)
                 if response.status_code == 429:
                     errors_count += 1
                     raise Exception("Rate limit reached")
                 if error_code != APIErrorResponse.OK:
-                    if response.status_code == 500 or (
-                            error_code == 'invalid_params' and error_msg.startswith(
-                        "Search Id")) or error_msg == "Invalid count or cursor":
+                    if response.status_code >= 500 and not (
+                            error_code == 'invalid_params' and error_msg.startswith("Search Id")
+                    ) and error_msg != "Invalid count or cursor":
+                        retries += 1
+                        errors_count += 1
+                        if retries > self.max_server_error_retries:
+                            raise ServerError(response.status_code, error_code, error_msg, log_id)
+                        self.logger.warning(f"Server error {response.status_code} ({start_str}-{end_str}), "
+                                            f"retry {retries}/{self.max_server_error_retries} "
+                                            f"in {self.retry_sleep_time} sec: {error_code=}; {error_msg=}; {log_id=}")
+                        time.sleep(self.retry_sleep_time)
+                        continue
+                    if (error_code == 'invalid_params' and error_msg.startswith(
+                            "Search Id")) or error_msg == "Invalid count or cursor":
                         # Polling while we wait for backend cache to populate
                         retries += 1
                         if retries >= self.max_query_retries:
